@@ -5,6 +5,7 @@
 #include "Components/InputComponent.h"
 
 #include "Engine/World.h"
+#include "DrawDebugHelpers.h"
 
 // Sets default values
 AGoKart::AGoKart()
@@ -19,6 +20,23 @@ void AGoKart::BeginPlay()
 {
 	Super::BeginPlay();
 	
+}
+
+FString GetEnumText(ENetRole Role)
+{
+	switch (Role)
+	{
+	case ROLE_None:
+		return "None";
+	case ROLE_SimulatedProxy:
+		return "SimulatedProxy";
+	case ROLE_AutonomousProxy:
+		return "AutonomousProxy";
+	case ROLE_Authority:
+		return "Authority";
+	default:
+		return "Error";
+	}
 }
 
 // Called every frame
@@ -38,6 +56,8 @@ void AGoKart::Tick(float DeltaTime)
 	ApplyRotation(DeltaTime);
 
 	UpdateLocationFromVelocity(DeltaTime);
+
+	DrawDebugString(GetWorld(), FVector(0, 0, 100), GetEnumText(Role), this, FColor::White, DeltaTime);
 }
 
 FVector AGoKart::GetAirResistance()
@@ -87,12 +107,35 @@ void AGoKart::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 	PlayerInputComponent->BindAxis("MoveRight", this, &AGoKart::MoveRight);
 }
 
+// prvo updateamo poziciju lokalno
 void AGoKart::MoveForward(float Value)
 {
 	Throttle = Value;
+	Server_MoveForward(Value);									// zatim updateamo poziciju na serveru
 }
 
 void AGoKart::MoveRight(float Value)
 {
 	SteeringThrow = Value;
+	Server_MoveRight(Value);
+}
+
+void AGoKart::Server_MoveForward_Implementation(float Value)	// Na serveru se zapravo izvrsava ova funkcija post-fixana sa _Implementation(ne Server_MoveForward).
+{
+	Throttle = Value;
+}
+
+bool AGoKart::Server_MoveForward_Validate(float Value)			// potrebno za anti-cheat
+{
+	return FMath::Abs(Value) <= 1;								// vrati true samo ako je vrijednost gasa izmedu 0 i 1. Sve ostalo je ne moguce i smatra se varanjem
+}
+
+void AGoKart::Server_MoveRight_Implementation(float Value)
+{
+	SteeringThrow = Value;
+}
+
+bool AGoKart::Server_MoveRight_Validate(float Value)		
+{
+	return FMath::Abs(Value) <= 1;
 }

@@ -59,4 +59,10 @@ private:
 
 	void MoveForward(float Value);
 	void MoveRight(float Value);
+
+	UFUNCTION(Server, Reliable, WithValidation)			// RPC funkcija (Remote Procedure Call) - poziva se na klijentu, a izvršava se na SERVER-u. Svi RPCs su unreliable po pitanju izvrsavanja, 				
+	void Server_MoveForward(float Value);				// stoga ako zelimo da se funckija izvrsi dodamo 'Reliable'. Pre-fixed sa Server_ jer se izvrsava na serveru.
+
+	UFUNCTION(Server, Reliable, WithValidation)
+	void Server_MoveRight(float Value);
 };
