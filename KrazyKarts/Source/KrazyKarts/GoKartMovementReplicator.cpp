@@ -2,6 +2,7 @@
 
 #include "GoKartMovementReplicator.h"
 #include "UnrealNetwork.h"
+#include "GameFramework/Actor.h"
 
 // Sets default values for this component's properties
 UGoKartMovementReplicator::UGoKartMovementReplicator()
@@ -85,7 +86,11 @@ FHermiteCubicSpline UGoKartMovementReplicator::CreateSpline()
 void UGoKartMovementReplicator::InterpolateLocation(const FHermiteCubicSpline &Spline, float LerpRatio)
 {
 	FVector NewLocation = Spline.InterpolateLocation(LerpRatio);
-	GetOwner()->SetActorLocation(NewLocation);
+
+	if (MeshOffsetRoot != nullptr)
+	{
+		MeshOffsetRoot->SetWorldLocation(NewLocation);
+	}
 }
 
 void UGoKartMovementReplicator::InterpolateVelocity(const FHermiteCubicSpline &Spline, float LerpRatio)
@@ -101,7 +106,11 @@ void UGoKartMovementReplicator::InterpolateRotation(float LerpRatio)
 	FQuat StartRotation = ClientStartTransform.GetRotation();
 
 	FQuat NewRotation = FQuat::Slerp(StartRotation, TargetRotation, LerpRatio);			// interpolira rotaciju izmedu dvije rotacije: trenutne i kako bi trebao biti rotiran
-	GetOwner()->SetActorRotation(NewRotation);
+	
+	if (MeshOffsetRoot != nullptr)
+	{
+		MeshOffsetRoot->SetWorldRotation(NewRotation);
+	}
 }
 
 float UGoKartMovementReplicator::VelocityToDerivative()
@@ -153,8 +162,15 @@ void UGoKartMovementReplicator::SimulatedProxy_OnRep_ServerState()
 	ClientTimeBetweenLastUpdates = ClientTimeSinceUpdate;
 	ClientTimeSinceUpdate = 0;
 
-	ClientStartTransform = GetOwner()->GetActorTransform();
+	if (MeshOffsetRoot != nullptr)
+	{
+		ClientStartTransform.SetLocation(MeshOffsetRoot->GetComponentLocation());		// postavljamo lokaciju od MeshOffset-a radi uklanjanja fantomskih kolizija na klijentu
+		ClientStartTransform.SetRotation(MeshOffsetRoot->GetComponentQuat());			// isto i za rotaciju
+	}
+	
 	ClientStartVelocity = MovementComponent->GetVelocity();
+
+	GetOwner()->SetActorTransform(ServerState.Transform);
 }
 
 void UGoKartMovementReplicator::ClearAcknowledgedMoves(FGoKartMove LastMove)
@@ -175,6 +191,7 @@ void UGoKartMovementReplicator::Server_SendMove_Implementation(FGoKartMove Move)
 {																	// na serveru simulirati kretanje
 	if (MovementComponent == nullptr) return;
 
+	ClientSimulatedTime += Move.DeltaTime;
 	MovementComponent->SimulateMove(Move);
 
 	UpdateServerState(Move);
@@ -182,5 +199,17 @@ void UGoKartMovementReplicator::Server_SendMove_Implementation(FGoKartMove Move)
 
 bool UGoKartMovementReplicator::Server_SendMove_Validate(FGoKartMove Move)			// potrebno za anti-cheat
 {
-	return true;								// TODO; make better validation
+	float ProposedTime = ClientSimulatedTime + Move.DeltaTime;
+	bool ClientNotRunningAhead = ProposedTime < GetWorld()->TimeSeconds;
+	if (!ClientNotRunningAhead)														// sprjecava da klijent ide "prebrzo" u smislu da mu vrijeme drugacije prolazi
+	{
+		UE_LOG(LogTemp, Error, TEXT("Client is running too fast"))
+		return false;
+	}
+	if (!Move.IsValid())															// sprjecava namjestanje prevelikih parametara pokreta (Throttle i SteeringThrow)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Recieved invalid move"))
+		return false;
+	}
+	return true;															
 }

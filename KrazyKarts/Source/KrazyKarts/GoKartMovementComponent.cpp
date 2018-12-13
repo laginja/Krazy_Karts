@@ -1,7 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "GoKartMovementComponent.h"
-
+#include "GameFramework/Actor.h"
 
 // Sets default values for this component's properties
 UGoKartMovementComponent::UGoKartMovementComponent()
@@ -74,6 +74,7 @@ FVector UGoKartMovementComponent::GetRollingResistance()
 {
 	float AccelerationDueToGravity = -GetWorld()->GetGravityZ() / 100;					// GetGravityZ vraca -980.0 jer vraca vrijednosti po UE defaultima
 	float NormalForce = Mass * AccelerationDueToGravity;
+
 	return -Velocity.GetSafeNormal() * RollingResistanceCoef * NormalForce;
 }
 

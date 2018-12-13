@@ -85,6 +85,13 @@ private:
 	FTransform ClientStartTransform;
 	FVector ClientStartVelocity;
 
+	float ClientSimulatedTime;
+
 	UPROPERTY()
 	UGoKartMovementComponent* MovementComponent;
+
+	UPROPERTY()
+	USceneComponent* MeshOffsetRoot;					// Koristimo scene component kako bi dobili tocnu koliziju. Na taj nacin, ako se na serveru ne dogodi kolizija sa cunjevima, nece ni na klijentu
+	UFUNCTION(BlueprintCallable)
+	void SetMeshOffsetRoot(USceneComponent* Root) { MeshOffsetRoot = Root; }
 };
