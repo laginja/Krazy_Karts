@@ -29,24 +29,84 @@ void UGoKartMovementReplicator::TickComponent(float DeltaTime, ELevelTick TickTy
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	if (MovementComponent == nullptr) return;
+	
+	FGoKartMove LastMove = MovementComponent->GetLastMove();
 
 	if (GetOwnerRole() == ROLE_AutonomousProxy)		// ako smo klijent,tj. autonomous proxy
 	{
-		FGoKartMove Move = MovementComponent->CreateMove(DeltaTime);	// kreiraj pokret
-		MovementComponent->SimulateMove(Move);							// simuliraj pokret lokalno (da ga i korisnik moze vidjeti) izmedu stanja pokreta dobivenih sa servera
-
-		UnacknowledgedMoves.Add(Move);				// pokret dodaj u queue koji ce provjeravati koji pokreti su izvrseni, a koji ne (u slucaju laga)
-		Server_SendMove(Move);						// posalji taj isti 'Move' serveru na izvrsavanje. On ce ga izvrsiti i vratiti nam stanje transformacije koje cemo mi onda postaviti na klijentu
+		UnacknowledgedMoves.Add(LastMove);				// pokret dodaj u queue koji ce provjeravati koji pokreti su izvrseni, a koji ne (u slucaju laga)
+		Server_SendMove(LastMove);						// posalji taj isti 'Move' serveru na izvrsavanje. On ce ga izvrsiti i vratiti nam stanje transformacije koje cemo mi onda postaviti na klijentu
 	}
-	if (GetOwnerRole() == ROLE_Authority && GetOwner()->GetRemoteRole() == ROLE_SimulatedProxy)				// zelimo slucaj kada RemoteRole nije autonomous proxy. Onda to znaci da smo mi server i kontroliramo Pawn-a
-	{
-		FGoKartMove Move = MovementComponent->CreateMove(DeltaTime);
-		Server_SendMove(Move);				// iako se radi o serveru, svejedno salje pokret serveru (sam sebi) i tamo ga simulira te transformaciju salje svim autonomous proxy 
+	if (GetOwnerRole() == ROLE_Authority && GetOwner()->GetRemoteRole() == ROLE_SimulatedProxy)		// zelimo slucaj kada RemoteRole nije autonomous proxy. Onda to znaci da smo mi server i kontroliramo Pawn-a
+	{																								// Moguce izbaciti 'GetOwnerRole() == ROLE_Authority' dio
+		UpdateServerState(LastMove);
 	}
 	if (GetOwnerRole() == ROLE_SimulatedProxy)		// ako smo simulated proxy
 	{
-		MovementComponent->SimulateMove(ServerState.LastMove);
+		ClientTick(DeltaTime);
 	}
+}
+
+void UGoKartMovementReplicator::UpdateServerState(const FGoKartMove& Move)
+{
+	ServerState.LastMove = Move;
+	ServerState.Transform = GetOwner()->GetActorTransform();					// postavljamo transformaciju actora na serveru svaki frame i omogucavamo ju za replikaciju
+	ServerState.Velocity = MovementComponent->GetVelocity();
+}
+
+void UGoKartMovementReplicator::ClientTick(float DeltaTime)
+{
+	ClientTimeSinceUpdate += DeltaTime;
+
+	if (ClientTimeBetweenLastUpdates < KINDA_SMALL_NUMBER) return;
+	if (MovementComponent == nullptr) return;
+
+	float LerpRatio = ClientTimeSinceUpdate / ClientTimeBetweenLastUpdates;
+	FHermiteCubicSpline Spline = CreateSpline(); 
+	
+	InterpolateLocation(Spline, LerpRatio);
+
+	InterpolateVelocity(Spline, LerpRatio);
+
+	InterpolateRotation(LerpRatio);
+}
+
+FHermiteCubicSpline UGoKartMovementReplicator::CreateSpline()
+{
+	FHermiteCubicSpline Spline;
+	Spline.TargetLocation = ServerState.Transform.GetLocation();
+	Spline.StartLocation = ClientStartTransform.GetLocation();
+	Spline.StartDerivative = ClientStartVelocity * VelocityToDerivative();
+	Spline.TargetDerivative = ServerState.Velocity * VelocityToDerivative();
+
+	return Spline;
+}
+
+void UGoKartMovementReplicator::InterpolateLocation(const FHermiteCubicSpline &Spline, float LerpRatio)
+{
+	FVector NewLocation = Spline.InterpolateLocation(LerpRatio);
+	GetOwner()->SetActorLocation(NewLocation);
+}
+
+void UGoKartMovementReplicator::InterpolateVelocity(const FHermiteCubicSpline &Spline, float LerpRatio)
+{
+	FVector NewDerivative = Spline.InterpolateDerivative(LerpRatio);
+	FVector NewVelocity = NewDerivative / VelocityToDerivative();
+	MovementComponent->SetVelocity(NewVelocity);
+}
+
+void UGoKartMovementReplicator::InterpolateRotation(float LerpRatio)
+{
+	FQuat TargetRotation = ServerState.Transform.GetRotation();
+	FQuat StartRotation = ClientStartTransform.GetRotation();
+
+	FQuat NewRotation = FQuat::Slerp(StartRotation, TargetRotation, LerpRatio);			// interpolira rotaciju izmedu dvije rotacije: trenutne i kako bi trebao biti rotiran
+	GetOwner()->SetActorRotation(NewRotation);
+}
+
+float UGoKartMovementReplicator::VelocityToDerivative()
+{
+	return ClientTimeBetweenLastUpdates * 100;	// * 100 da se prebaci u metre ;
 }
 
 void UGoKartMovementReplicator::GetLifetimeReplicatedProps(TArray< FLifetimeProperty > & OutLifetimeProps) const		// ne mijenjaj ime argumenta
@@ -58,10 +118,25 @@ void UGoKartMovementReplicator::GetLifetimeReplicatedProps(TArray< FLifetimeProp
 
 void UGoKartMovementReplicator::OnRep_ServerState()				// ovo ce se pozvati samo na klijentu kada je doslo do promjene stoga ne treba provjeravati 'HasAuthority()'
 {
+	switch (GetOwnerRole())
+	{
+	case ROLE_AutonomousProxy:
+		AutonomousProxy_OnRep_ServerState();
+		break;
+	case ROLE_SimulatedProxy:
+		SimulatedProxy_OnRep_ServerState();
+		break;
+	default:
+		break;
+	}
+}
+
+void UGoKartMovementReplicator::AutonomousProxy_OnRep_ServerState()
+{
 	if (MovementComponent == nullptr) return;
 
 	GetOwner()->SetActorTransform(ServerState.Transform);				// postavi transformaciju klijenta prema onoj koja se nalazi na serveru
-	MovementComponent->SetVelocity(ServerState.Velocity);						// Resetiramo 'Velocity' na klijentu na sto god server kaze da je tocno
+	MovementComponent->SetVelocity(ServerState.Velocity);				// Resetiramo 'Velocity' na klijentu na sto god server kaze da je tocno
 
 	ClearAcknowledgedMoves(ServerState.LastMove);
 
@@ -69,6 +144,17 @@ void UGoKartMovementReplicator::OnRep_ServerState()				// ovo ce se pozvati samo
 	{
 		MovementComponent->SimulateMove(Move);						// simuliraj sve pokrete koji se jos 'nisu dogodili'
 	}
+}
+
+void UGoKartMovementReplicator::SimulatedProxy_OnRep_ServerState()
+{
+	if (MovementComponent == nullptr) return;
+
+	ClientTimeBetweenLastUpdates = ClientTimeSinceUpdate;
+	ClientTimeSinceUpdate = 0;
+
+	ClientStartTransform = GetOwner()->GetActorTransform();
+	ClientStartVelocity = MovementComponent->GetVelocity();
 }
 
 void UGoKartMovementReplicator::ClearAcknowledgedMoves(FGoKartMove LastMove)
@@ -91,9 +177,7 @@ void UGoKartMovementReplicator::Server_SendMove_Implementation(FGoKartMove Move)
 
 	MovementComponent->SimulateMove(Move);
 
-	ServerState.LastMove = Move;
-	ServerState.Transform = GetOwner()->GetActorTransform();					// postavljamo transformaciju actora na serveru svaki frame i omogucavamo ju za replikaciju
-	ServerState.Velocity = MovementComponent->GetVelocity();
+	UpdateServerState(Move);
 }
 
 bool UGoKartMovementReplicator::Server_SendMove_Validate(FGoKartMove Move)			// potrebno za anti-cheat

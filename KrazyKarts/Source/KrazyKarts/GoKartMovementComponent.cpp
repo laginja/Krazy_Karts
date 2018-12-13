@@ -29,7 +29,12 @@ void UGoKartMovementComponent::TickComponent(float DeltaTime, ELevelTick TickTyp
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
-	// ...
+	if (GetOwnerRole() == ROLE_AutonomousProxy || GetOwner()->GetRemoteRole() == ROLE_SimulatedProxy)
+	{
+		LastMove = CreateMove(DeltaTime);				// kreiraj pokret
+		SimulateMove(LastMove);							// simuliraj pokret lokalno (da ga i korisnik moze vidjeti i server (ako je korisnik server)) izmedu stanja pokreta dobivenih sa servera
+	}
+	
 }
 
 void UGoKartMovementComponent::SimulateMove(const FGoKartMove& Move)
